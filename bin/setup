@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+#
+# setup — One-time setup for the Enphase Telegraf collector
+#
+# What this does:
+#   1. Creates a Python venv with dependencies
+#   2. Compiles protobuf schemas (if needed)
+#   3. Prompts for Enphase credentials (if no .env)
+#   4. Tests the connection
+#   5. Prints the Telegraf config snippet
+#
+# Usage:
+#   ./bin/setup
+#
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+echo "=== Enphase Telegraf Setup ==="
+echo
+
+# ── Step 1: Python venv ────────────────────────────
+echo "[1/4] Setting up Python virtual environment..."
+if [ -d "$REPO_DIR/venv" ]; then
+    echo "  venv already exists at $REPO_DIR/venv"
+else
+    python3 -m venv "$REPO_DIR/venv" 2>/dev/null || {
+        echo "  ERROR: python3-venv not installed."
+        echo "  Run: sudo apt install python3-venv   (Debian/Ubuntu)"
+        echo "  Or:  sudo dnf install python3-venv    (Fedora/RHEL)"
+        exit 1
+    }
+    echo "  Created venv"
+fi
+"$REPO_DIR/venv/bin/pip" install -q requests paho-mqtt protobuf
+echo "  Dependencies installed: requests, paho-mqtt, protobuf"
+echo
+
+# ── Step 2: Protobuf ──────────────────────────────
+echo "[2/4] Checking protobuf schemas..."
+PROTO_SRC="$REPO_DIR/proto"
+PROTO_DST="$REPO_DIR/src/enphase_cloud/proto"
+
+if [ -f "$PROTO_DST/DataMsg_pb2.py" ]; then
+    echo "  Compiled schemas already present"
+elif [ -f "$PROTO_SRC/DataMsg.proto" ]; then
+    echo "  Compiling protobuf schemas..."
+    "$REPO_DIR/venv/bin/pip" install -q grpcio-tools
+    "$REPO_DIR/venv/bin/python3" -m grpc_tools.protoc \
+        --proto_path="$PROTO_SRC" \
+        --python_out="$PROTO_DST" \
+        "$PROTO_SRC/DataMsg.proto" \
+        "$PROTO_SRC/MeterSummaryData.proto" \
+        "$PROTO_SRC/HemsStreamMessage.proto"
+    echo "  Compiled OK"
+else
+    echo "  WARNING: Proto source files not found at $PROTO_SRC"
+    echo "  MQTT live streaming will not work without compiled protobuf schemas."
+fi
+echo
+
+# ── Step 3: Credentials ───────────────────────────
+echo "[3/4] Checking credentials..."
+if [ -f "$REPO_DIR/.env" ] && grep -q "ENPHASE_EMAIL" "$REPO_DIR/.env"; then
+    EMAIL=$(grep "^ENPHASE_EMAIL=" "$REPO_DIR/.env" | cut -d= -f2)
+    if [ -n "$EMAIL" ] && [ "$EMAIL" != "your-email@example.com" ]; then
+        echo "  Credentials found in .env ($EMAIL)"
+    else
+        echo "  .env exists but credentials are blank."
+        read -rp "  Enter your Enphase email: " EMAIL
+        read -rsp "  Enter your Enphase password: " PASSWORD
+        echo
+        sed -i "s/^ENPHASE_EMAIL=.*/ENPHASE_EMAIL=$EMAIL/" "$REPO_DIR/.env"
+        sed -i "s/^ENPHASE_PASSWORD=.*/ENPHASE_PASSWORD=$PASSWORD/" "$REPO_DIR/.env"
+        echo "  Saved to .env"
+    fi
+else
+    read -rp "  Enter your Enphase email: " EMAIL
+    read -rsp "  Enter your Enphase password: " PASSWORD
+    echo
+    cat > "$REPO_DIR/.env" << EOF
+ENPHASE_EMAIL=$EMAIL
+ENPHASE_PASSWORD=$PASSWORD
+EOF
+    chmod 600 "$REPO_DIR/.env"
+    echo "  Created .env (permissions: 600)"
+fi
+echo
+
+# ── Step 4: Test connection ────────────────────────
+echo "[4/4] Testing connection..."
+set -a; source "$REPO_DIR/.env"; set +a
+export PYTHONPATH="$REPO_DIR/src"
+
+OUTPUT=$("$REPO_DIR/venv/bin/python3" "$REPO_DIR/src/enphase_telegraf.py" --verbose 2>&1 | head -20 &
+BGPID=$!
+sleep 15
+kill $BGPID 2>/dev/null
+wait $BGPID 2>/dev/null)
+
+if echo "$OUTPUT" | grep -q "enphase_power"; then
+    echo "  SUCCESS — Data is flowing!"
+    echo
+    SERIAL=$(echo "$OUTPUT" | grep -oP 'serial=\K[0-9]+' | head -1)
+    echo "  Serial: ${SERIAL:-auto-discovered}"
+    echo "  Data rate: ~1 message/second"
+else
+    echo "  WARNING — Could not verify data flow."
+    echo "  Check your credentials and try: ./bin/enphase-telegraf --verbose"
+fi
+echo
+
+# ── Done ──────────────────────────────────────────
+echo "=== Setup Complete ==="
+echo
+echo "To run standalone:"
+echo "  $REPO_DIR/bin/enphase-telegraf --verbose"
+echo
+echo "For Telegraf, copy conf/telegraf-enphase.conf to /etc/telegraf/telegraf.d/"
+echo "and edit the command path and credentials, then:"
+echo "  sudo systemctl restart telegraf"

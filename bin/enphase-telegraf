@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# enphase-telegraf — Enphase solar+battery data → InfluxDB line protocol
+#
+# Usage:
+#   ./bin/enphase-telegraf --help
+#   ./bin/enphase-telegraf --verbose              # see what's happening
+#   ./bin/enphase-telegraf                        # quiet mode for Telegraf
+#   ./bin/enphase-telegraf --email X --password Y # override credentials
+#
+# Setup (first time):
+#   ./bin/setup
+#
+# Telegraf config:
+#   [[inputs.execd]]
+#     command = ["/opt/enphase-telegraf/bin/enphase-telegraf"]
+#     signal = "none"
+#     data_format = "influx"
+#
+
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# Source .env if present (provides ENPHASE_EMAIL/PASSWORD)
+if [ -f "$REPO_DIR/.env" ]; then
+    set -a
+    source "$REPO_DIR/.env"
+    set +a
+fi
+
+# Use venv if available, fall back to system python
+if [ -x "$REPO_DIR/venv/bin/python3" ]; then
+    PYTHON="$REPO_DIR/venv/bin/python3"
+else
+    PYTHON="python3"
+    "$PYTHON" -c "import requests, paho, google.protobuf" 2>/dev/null || {
+        echo "[enphase-telegraf] ERROR: Dependencies not found." >&2
+        echo "[enphase-telegraf] Run: ./bin/setup" >&2
+        exit 1
+    }
+fi
+
+export PYTHONPATH="$REPO_DIR/src${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PYTHON" "$REPO_DIR/src/enphase_telegraf.py" "$@"
