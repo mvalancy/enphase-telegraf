@@ -105,13 +105,13 @@ def _clear_error(component: str):
 
 def log(msg: str):
     if _verbose:
-        print(f"[enphase-mqtt] {msg}", file=sys.stderr, flush=True)
+        print(f"[enphase-telegraf] {msg}", file=sys.stderr, flush=True)
 
 def warn(msg: str):
-    print(f"[enphase-mqtt] WARNING: {msg}", file=sys.stderr, flush=True)
+    print(f"[enphase-telegraf] WARNING: {msg}", file=sys.stderr, flush=True)
 
 def error(msg: str):
-    print(f"[enphase-mqtt] ERROR: {msg}", file=sys.stderr, flush=True)
+    print(f"[enphase-telegraf] ERROR: {msg}", file=sys.stderr, flush=True)
 
 
 def _esc_tag(s: str) -> str:
@@ -631,11 +631,11 @@ def main():
     logging.basicConfig(
         stream=sys.stderr,
         level=logging.WARNING,
-        format="[enphase-mqtt] %(levelname)s %(name)s: %(message)s",
+        format="[enphase-telegraf] %(levelname)s %(name)s: %(message)s",
     )
 
     parser = argparse.ArgumentParser(
-        prog="enphase-mqtt",
+        prog="enphase-telegraf",
         description="Stream Enphase solar/battery data as InfluxDB line protocol.",
         epilog="""
 measurements written to stdout (InfluxDB line protocol):
@@ -667,9 +667,9 @@ measurements written to stdout (InfluxDB line protocol):
   See docs/MEASUREMENT_TYPES.md for the complete field reference.
 
 examples:
-  ./bin/enphase-mqtt --verbose                            # debug mode
-  ./bin/enphase-mqtt                                      # Telegraf mode
-  ./bin/enphase-mqtt --email X --password Y --serial Z    # explicit config
+  ./bin/enphase-telegraf --verbose                            # debug mode
+  ./bin/enphase-telegraf                                      # Telegraf mode
+  ./bin/enphase-telegraf --email X --password Y --serial Z    # explicit config
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
