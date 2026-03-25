@@ -1,4 +1,6 @@
 .env
+.credentials
+.cache/
 __pycache__/
 *.pyc
 *.pyo
@@ -8,3 +10,5 @@ venv/
 dist/
 build/
 *.db
+.claude/worktrees/
+test-report.html
