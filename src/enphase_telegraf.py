@@ -15,6 +15,7 @@ See docs/MEASUREMENT_TYPES.md for the complete field reference.
 import argparse
 import json
 import logging
+import math
 import os
 import signal
 import sys
@@ -115,7 +116,18 @@ def error(msg: str):
 
 
 def _esc_tag(s: str) -> str:
-    return s.replace("\\", "\\\\").replace(" ", "\\ ").replace(",", "\\,").replace("=", "\\=")
+    """Escape a tag key or value for InfluxDB line protocol.
+
+    Must escape: backslash, space, comma, equals.
+    Must also strip newlines/carriage returns — they would corrupt the line.
+    """
+    return (s
+            .replace("\\", "\\\\")
+            .replace(" ", "\\ ")
+            .replace(",", "\\,")
+            .replace("=", "\\=")
+            .replace("\n", "")
+            .replace("\r", ""))
 
 def _esc_field_str(s: str) -> str:
     """Escape a string field value for line protocol. Must handle quotes AND newlines."""
@@ -145,7 +157,9 @@ def emit(measurement: str, tags: dict, fields: dict, ts_ns: int | None = None):
         elif isinstance(v, int):
             parts.append(f"{k}={v}i")
         elif isinstance(v, float):
-            parts.append(f"{k}={v}")
+            if math.isfinite(v):
+                parts.append(f"{k}={v}")
+            # Skip NaN and Infinity — InfluxDB rejects them
         elif isinstance(v, str):
             parts.append(f'{k}="{_esc_field_str(v)}"')
     if not parts:
@@ -540,23 +554,27 @@ def cloud_poll_once():
                         })
 
             elif endpoint == "inverters" and isinstance(data, dict):
-                total = data.get("total", 0)
-                not_rpt = data.get("not_reporting", 0)
-                err = data.get("error_count", 0)
-                warn_ct = data.get("warning_count", 0)
+                total = data.get("total") or 0
+                not_rpt = data.get("not_reporting") or 0
+                err = data.get("error_count") or 0
+                warn_ct = data.get("warning_count") or 0
+                normal = data.get("normal_count") or 0
                 emit("enphase_inverters", {"serial": _serial}, {
                     "total": int(total),
                     "not_reporting": int(not_rpt),
                     "error_count": int(err),
                     "warning_count": int(warn_ct),
-                    "normal_count": int(data.get("normal_count", 0)),
+                    "normal_count": int(normal),
                 })
 
             elif endpoint == "alarms" and isinstance(data, dict):
-                alarm_total = data.get("total", 0)
+                try:
+                    alarm_total = int(data.get("total", 0) or 0)
+                except (TypeError, ValueError):
+                    alarm_total = 0
                 if alarm_total > 0:
                     emit("enphase_gateway", {"serial": _serial}, {
-                        "alarm_count": int(alarm_total),
+                        "alarm_count": alarm_total,
                     })
 
         except Exception as e:
