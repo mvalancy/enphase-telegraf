@@ -65,93 +65,30 @@ query it with **Grafana**, the InfluxDB UI, or any tool that speaks Flux/SQL.
 ```bash
 git clone https://github.com/mvalancy/enphase-telegraf.git
 cd enphase-telegraf
-./bin/setup        # creates venv, compiles proto, prompts for credentials, tests connection
+./setup.sh         # installs everything, prompts for credentials, starts Telegraf
 ```
 
-Data flowing in ~30 seconds.
+Data flowing in ~60 seconds. The setup script handles system packages (Telegraf,
+InfluxDB, python3-venv), Python venv, protobuf compilation, credentials, Telegraf
+config, and a connection test. If you already have Telegraf+InfluxDB configured,
+it detects your existing InfluxDB credentials and only asks for Enphase login.
 
 ### Run standalone (no Telegraf needed)
 
+If you just want to set up the Python environment without Telegraf:
+
 ```bash
-./bin/enphase-telegraf --verbose
+./bin/setup                       # venv + proto + credentials only
+./bin/enphase-telegraf --verbose   # prints line protocol to stdout
 ```
 
-This prints line protocol to stdout and status to stderr. You can pipe it
-anywhere — InfluxDB's `influx write` CLI, a file, `curl` to any HTTP endpoint,
-or just watch it scroll by.
+You can pipe the output anywhere — InfluxDB's `influx write` CLI, a file,
+`curl` to any HTTP endpoint, or just watch it scroll by.
 
 ## Setting up Telegraf
 
-### 1. Install Telegraf + InfluxDB
-
-```bash
-# Ubuntu/Debian
-sudo apt install telegraf influxdb2
-
-# Or via Docker
-docker run -d -p 8086:8086 influxdb:2.7
-docker run -d --net=host telegraf
-```
-
-### 2. Configure InfluxDB
-
-Open `http://localhost:8086`, create an org, bucket (`enphase`), and API token.
-
-### 3. Set credentials
-
-Telegraf reads environment variables. The cleanest way:
-
-```bash
-# Create a credentials file for Telegraf's systemd service
-sudo tee /etc/default/telegraf << 'EOF'
-ENPHASE_EMAIL=you@example.com
-ENPHASE_PASSWORD=yourpassword
-INFLUXDB_URL=http://localhost:8086
-INFLUXDB_TOKEN=your-api-token-from-step-2
-INFLUXDB_ORG=your-org
-INFLUXDB_BUCKET=enphase
-EOF
-sudo chmod 600 /etc/default/telegraf
-```
-
-### 4. Install the Telegraf config
-
-```bash
-sudo cp conf/telegraf-enphase.conf /etc/telegraf/telegraf.d/enphase.conf
-```
-
-Edit `/etc/telegraf/telegraf.d/enphase.conf` — the only thing to change is the
-path to the `enphase-telegraf` script:
-
-```toml
-[[inputs.execd]]
-  command = ["/path/to/enphase-telegraf/bin/enphase-telegraf"]
-  signal = "none"
-  data_format = "influx"
-  restart_delay = "30s"
-
-[[outputs.influxdb_v2]]
-  urls = ["${INFLUXDB_URL}"]
-  token = "${INFLUXDB_TOKEN}"
-  organization = "${INFLUXDB_ORG}"
-  bucket = "${INFLUXDB_BUCKET}"
-```
-
-The `${...}` variables are expanded from the environment file you created in
-step 3. No credentials in the config file.
-
-### 5. Start
-
-```bash
-sudo systemctl restart telegraf
-```
-
-Data should appear in InfluxDB within seconds. Check with:
-
-```bash
-journalctl -u telegraf -f          # watch Telegraf logs
-influx query 'from(bucket:"enphase") |> range(start: -5m) |> limit(n:5)'
-```
+The `setup.sh` script handles Telegraf + InfluxDB installation automatically.
+For manual setup, see [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md).
 
 ## What it collects
 
@@ -273,23 +210,92 @@ sequenceDiagram
 ## Project structure
 
 ```
+setup.sh                    Full setup (installs everything, one command)
 bin/
   enphase-telegraf          Shell wrapper (sources .env, sets PYTHONPATH)
-  setup                     One-time setup (venv, proto, credentials, test)
+  load-history              Backfill InfluxDB with historical solar data
+  setup                     Python-only setup (venv, proto, credentials, test)
 conf/
   telegraf-enphase.conf     Drop-in Telegraf config (uses env vars, no secrets in file)
+infra/
+  scripts/                  InfluxDB + Grafana + Telegraf install scripts
+    setup-hub.sh            Full monitoring stack (InfluxDB + Grafana + Telegraf)
+    setup-collector.sh      InfluxDB only (init, admin user, tokens)
+    setup-agent.sh          Telegraf agent only
+  templates/                Config templates for InfluxDB, Telegraf, Grafana
 src/
   enphase_telegraf.py       Telegraf entry point (line protocol to stdout)
   enphase_cloud/            Python package
     enlighten.py            Enlighten API (20 data getters + 6 control methods)
     livestream.py           MQTT protobuf stream (~1Hz real-time data)
-    history.py              Historical data downloader
+    history.py              Historical data downloader (JSON cache)
+    history_loader.py       Convert cached history → InfluxDB line protocol
+    history_cli.py          Interactive CLI for bin/load-history
     proto/                  Compiled protobuf schemas
 proto/                      Protobuf source files (.proto, for recompiling)
 examples/                   Standalone scripts (battery control, cloud scrape, etc.)
+tests/                      2,400+ pytest tests (unit, fuzz, e2e)
 docs/
+  README.md                 Documentation index with system diagram
+  CLOUD_API.md              Enlighten REST API reference (20 endpoints)
+  MQTT_LIVESTREAM.md        MQTT protocol, protobuf schemas, field mapping
+  ARCHITECTURE.md           Threading, error handling, resilience design
+  SETUP_GUIDE.md            Detailed setup walkthrough and troubleshooting
+  TESTING.md                Test suite overview and design philosophy
+  BATTERY_CONTROL.md        Battery modes, schedules, control API
   MEASUREMENT_TYPES.md      Complete InfluxDB field reference
 ```
+
+## Documentation
+
+The [`docs/`](docs/) folder has detailed references:
+
+- [**Setup guide**](docs/SETUP_GUIDE.md) — full walkthrough, manual setup, infra scripts, troubleshooting
+- [**Architecture**](docs/ARCHITECTURE.md) — threading model, error handling, resilience design
+- [**Cloud API**](docs/CLOUD_API.md) — all 20 Enlighten endpoints, auth flow, response structures
+- [**MQTT live stream**](docs/MQTT_LIVESTREAM.md) — AWS IoT connection, protobuf schemas, field mapping
+- [**Measurement types**](docs/MEASUREMENT_TYPES.md) — every InfluxDB field with type, unit, range
+- [**Battery control**](docs/BATTERY_CONTROL.md) — modes, reserve, schedules, charge-from-grid
+- [**Testing**](docs/TESTING.md) — 2,400+ test suite, how to run, design philosophy
+
+## Roadmap
+
+```mermaid
+graph LR
+    subgraph "Now"
+        A1[Enlighten Cloud API]
+        A2[MQTT Live Stream]
+    end
+
+    subgraph "Next"
+        B1[Local Gateway<br/>HTTPS over LAN/WiFi]
+        B2[~1 sec resolution<br/>per-device metrics]
+    end
+
+    subgraph "Future"
+        C1[RS-485 / CAN bus<br/>direct device comms]
+        C2[~10ms resolution<br/>waveform capture]
+    end
+
+    A1 --> B1
+    A2 --> B1
+    B1 --> C1
+```
+
+**Current: Cloud-only (v1)** — works anywhere, no local network access needed.
+All data comes from Enphase cloud via MQTT (real-time) and REST API (polled).
+
+**Next: Local gateway (v2)** — direct HTTPS connection to the IQ Gateway on
+your LAN/WiFi. Higher resolution (~1 sec per device vs aggregated), per-inverter
+and per-battery metrics, CT meter readings with per-phase voltage/current/power
+factor. Requires local network access to the gateway (192.168.x.x). Uses
+gateway JWT token from Enlighten for authentication. The `enphase_cloud` package
+already has `get_gateway_token()` for this.
+
+**Future: Direct bus access (v3)** — RS-485/CAN/Zigbee connection to Enphase
+devices, bypassing the gateway entirely. Millisecond-resolution power data,
+waveform capture, direct inverter control. Requires physical access to the
+communication bus. Research phase.
 
 ## Legal notice
 
