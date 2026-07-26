@@ -1,3 +1,6 @@
 requests>=2.31,<3
 paho-mqtt>=2.0,<3
-protobuf>=4.21,<6
+# The committed *_pb2.py were generated with protoc gencode 6.31.1, and
+# protobuf refuses to load gencode newer than the runtime. The old
+# >=4.21,<6 pin resolved to 5.29.6 and failed on import.
+protobuf>=6.31,<7
