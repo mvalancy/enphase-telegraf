@@ -1,0 +1,66 @@
+# Deep lane: dev -> main.
+#
+# Same offline suite, plus a guard on the thing that actually broke here: the
+# committed protobuf gencode and the runtime pin drifting apart.
+name: deep
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: deep-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests + protobuf compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Generated protobuf loads against the pinned runtime
+        # This is the failure that was live before CI existed: the *_pb2.py
+        # were generated with gencode 6.31.1 while requirements pinned
+        # protobuf<6, so every import raised VersionError. Importing them
+        # directly fails fast and says so, rather than surfacing as an
+        # unrelated-looking test failure.
+        run: |
+          python - <<'PY'
+          import importlib, pathlib, sys
+          # livestream.py adds this dir to sys.path and imports the modules by
+          # bare name, so mirror that rather than guessing a package path.
+          sys.path.insert(0, "src/enphase_cloud/proto")
+          mods = sorted(p.stem for p in pathlib.Path("src/enphase_cloud/proto").glob("*_pb2.py"))
+          if not mods:
+              print("no generated protobuf modules found")
+              raise SystemExit(1)
+          for m in mods:
+              importlib.import_module(m)
+              print(f"  loaded {m}")
+          print(f"{len(mods)} generated module(s) load against the pinned runtime")
+          PY
+
+      - name: Tests
+        run: python -m pytest -q
+
+      - name: Confirm e2e is excluded by default
+        # If addopts ever loses `-m 'not e2e'`, CI would start dialling a real
+        # Enphase gateway. Assert the deselection is still happening.
+        run: |
+          python -m pytest -q 2>&1 | tee /tmp/out.txt
+          grep -q "deselected" /tmp/out.txt || {
+            echo "e2e tests are no longer being deselected — addopts regression"
+            exit 1
+          }
